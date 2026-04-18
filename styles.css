@@ -76,6 +76,7 @@ body { font-family: var(--sans); background: var(--cream); color: var(--text); m
   white-space: nowrap;
 }
 .form-row .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.form-row .three-col { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; }
 
 .import-area { margin-bottom: 8px; }
 .import-hint { font-size: 12px; color: var(--text-muted); margin-bottom: 8px; line-height: 1.5; }

@@ -38,9 +38,10 @@
       </div>
       <div class="form-row">
         <label>Weight</label>
-        <div class="two-col">
-          <div class="unit-row"><input type="number" id="weight" placeholder="e.g. 6500" step="1" min="0" oninput="syncWeightGToLbs()"><span class="unit-badge">g</span></div>
-          <div class="unit-row"><input type="number" id="weightLbs" placeholder="lbs" step="0.01" min="0" oninput="syncWeightLbsToG()"><span class="unit-badge">lbs</span></div>
+        <div class="three-col">
+          <div class="unit-row"><input type="number" id="weight" placeholder="g" step="1" min="0" oninput="syncWeightGToOthers()"><span class="unit-badge">g</span></div>
+          <div class="unit-row"><input type="number" id="weightKg" placeholder="kg" step="0.001" min="0" oninput="syncWeightKgToOthers()"><span class="unit-badge">kg</span></div>
+          <div class="unit-row"><input type="number" id="weightLbs" placeholder="lbs" step="0.01" min="0" oninput="syncWeightLbsToOthers()"><span class="unit-badge">lbs</span></div>
         </div>
       </div>
       <div class="form-row">
