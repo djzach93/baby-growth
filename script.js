@@ -8,7 +8,6 @@
 const WHO_LMS = {
   weight: {
     boys: [
-      // [L, M, S] for months 0–24
       [0.3487,3.3464,0.14602],[0.2297,4.4709,0.13395],[0.1970,5.5675,0.12979],
       [0.1738,6.3762,0.12535],[0.1553,7.0023,0.12120],[0.1395,7.5105,0.11771],
       [0.1257,7.9340,0.11477],[0.1134,8.2970,0.11218],[0.1021,8.6151,0.10983],
@@ -81,8 +80,6 @@ const WHO_LMS = {
   }
 };
 
-// ─── WHO Percentile Band Reference (P3/P15/P50/P85/P97) ─────────────────────
-// Used for CDC reference curves and chart rendering bands
 const WHO = {
   weight: {
     boys: {
@@ -185,7 +182,88 @@ let profiles = JSON.parse(localStorage.getItem('babyProfiles') || '[]');
 let currentProfileId = localStorage.getItem('currentProfileId') || null;
 let charts = {};
 let activeTab = 'weight';
-let pendingImportData = [];   // holds rows awaiting user confirmation
+let pendingImportData = [];
+
+// ─── UTILITIES (STRICT LOCAL TIME FOR CALCULATIONS) ───────────────────────────
+function getLocalYYYYMMDD(date) {
+    if (!date) date = new Date();
+    const y = date.getFullYear();
+    const m = String(date.getMonth() + 1).padStart(2, '0');
+    const d = String(date.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+}
+
+function parseDateStrict(str) {
+    if (!str) return new Date();
+    const s = String(str).split('T')[0].trim();
+    
+    // Safely extract year, month, and day regardless of common delimiters
+    const parts = s.split(/[-/.]/);
+    if (parts.length === 3) {
+        let p0 = parseInt(parts[0], 10);
+        let p1 = parseInt(parts[1], 10);
+        let p2 = parseInt(parts[2], 10);
+        
+        let y, m, d;
+        if (p0 >= 1000) {
+            // YYYY-MM-DD
+            y = p0; m = p1; d = p2;
+        } else if (p2 >= 1000) {
+            // XX/XX/YYYY
+            y = p2;
+            if (p0 > 12) {
+                // DD/MM/YYYY
+                d = p0; m = p1;
+            } else {
+                // MM/DD/YYYY
+                m = p0; d = p1;
+            }
+        }
+        if (y && m && d) {
+            return new Date(y, m - 1, d);
+        }
+    }
+    
+    // Fallback if parsing fails (should rarely happen)
+    const fallback = new Date(str);
+    if (!isNaN(fallback.getTime())) {
+        fallback.setHours(0,0,0,0);
+        return fallback;
+    }
+    return new Date();
+}
+
+function getAgeMonths(dobStr, measDateStr) {
+    const dob = parseDateStrict(dobStr);
+    const meas = parseDateStrict(measDateStr);
+    const diffMs = meas.getTime() - dob.getTime();
+    if (diffMs <= 0) return 0;
+    return diffMs / (1000 * 60 * 60 * 24 * 30.4375);
+}
+
+function formatAge(months) {
+    if (months === undefined || months === null || isNaN(months) || months <= 0) return '0d';
+    const totalDays = Math.round(months * 30.4375);
+    if (totalDays < 30) return `${totalDays}d`;
+    
+    const m = Math.floor(months);
+    const remainingDays = Math.round((months - m) * 30.4375);
+    const w = Math.floor(remainingDays / 7);
+    
+    if (months < 24) {
+        if (w > 0) return `${m}mo ${w}w`;
+        if (remainingDays > 0) return `${m}mo ${remainingDays}d`;
+        return `${m}mo`;
+    }
+    const y = Math.floor(m / 12);
+    const remM = m % 12;
+    return remM > 0 ? `${y}y ${remM}mo` : `${y}y`;
+}
+
+function formatDate(dateStr) {
+    const d = parseDateStrict(dateStr);
+    return d.toLocaleDateString('en-GB', { day:'2-digit', month:'short', year:'numeric' });
+}
 
 // ─── File System Access API ───────────────────────────────────────────────────
 let rootDirHandle = null;
@@ -213,7 +291,6 @@ async function loadPersistedDirHandle() {
       try {
         const perm = await handle.queryPermission({ mode: 'readwrite' });
         if (perm === 'granted') { rootDirHandle = handle; showFolderStatus(); return; }
-        // Don't auto-request — wait for user action
       } catch(e) {}
     };
   } catch(e) {}
@@ -236,14 +313,11 @@ async function setRootFolder() {
     const handle = await window.showDirectoryPicker({ mode: 'readwrite' });
     rootDirHandle = handle;
     await persistDirHandle(handle);
-    // Create subfolders
     await handle.getDirectoryHandle('cache', { create: true });
     await handle.getDirectoryHandle('exports', { create: true });
     showFolderStatus();
     showImportStatus(`Save folder set! Cache → .../cache/  |  Exports → .../exports/`, 'success');
-  } catch(e) {
-    if (e.name !== 'AbortError') console.error(e);
-  }
+  } catch(e) {}
 }
 
 function showFolderStatus() {
@@ -267,43 +341,38 @@ async function writeToFolder(subfolder, filename, content) {
     await w.write(typeof content === 'string' ? content : JSON.stringify(content, null, 2));
     await w.close();
     return true;
-  } catch(e) { console.warn('Folder write failed:', e); return false; }
+  } catch(e) { return false; }
 }
 
 async function saveCacheNow() {
   const data = { profiles, savedAt: new Date().toISOString(), version: 2 };
-  const filename = `profiles_${new Date().toISOString().split('T')[0]}.json`;
+  const filename = `profiles_${getLocalYYYYMMDD()}.json`;
   const content = JSON.stringify(data, null, 2);
-
-  // Always keep localStorage in sync
   saveProfiles();
 
   if (rootDirHandle) {
     const ok = await writeToFolder('cache', 'profiles_cache.json', content);
     if (ok) {
-      await writeToFolder('cache', filename, content);  // timestamped backup too
+      await writeToFolder('cache', filename, content);
       showImportStatus('Cache saved to cache/profiles_cache.json', 'success');
       return;
     }
   }
-  // Fallback: download
   downloadBlob('baby_tracker_cache.json', content, 'application/json');
-  showImportStatus('Cache downloaded (set a save folder to write to cache/ directly)', 'info');
+  showImportStatus('Cache downloaded', 'info');
 }
 
-// ─── Migration: old data stored weight in kg → convert to grams ──────────────
 function migrateWeightData() {
   let migrated = false;
   profiles.forEach(p => {
     p.measurements.forEach(m => {
       if (m.weight != null && m.weight < 30) {
-        // Under 30 means it was stored in kg (no baby weighs < 30 grams)
         m.weight = Math.round(m.weight * 1000);
         migrated = true;
       }
     });
   });
-  if (migrated) { saveProfiles(); console.info('Migrated weight data from kg to grams'); }
+  if (migrated) saveProfiles();
 }
 
 function saveProfiles() {
@@ -317,17 +386,15 @@ function getCurrentProfile() {
 
 // ─── Init ─────────────────────────────────────────────────────────────────────
 window.onload = async function() {
-  document.getElementById('measDate').valueAsDate = new Date();
+  document.getElementById('measDate').value = getLocalYYYYMMDD();
   migrateWeightData();
   await loadPersistedDirHandle();
   renderProfileSelect();
   if (currentProfileId && profiles.find(p => p.id === currentProfileId)) {
     renderAll();
-    updateMeasAgePreview();
   }
 };
 
-// ─── Normal CDF (Abramowitz & Stegun approximation) ─────────────────────────
 function normalCDF(z) {
   const a1=0.254829592, a2=-0.284496736, a3=1.421413741, a4=-1.453152027, a5=1.061405429;
   const p=0.3275911, sign = z < 0 ? -1 : 1;
@@ -337,7 +404,6 @@ function normalCDF(z) {
   return 0.5 * (1 + sign * y);
 }
 
-// ─── WHO LMS Percentile (accurate) ───────────────────────────────────────────
 function getLMSAtAge(type, gender, ageMonths) {
   const table = WHO_LMS[type][gender === 'male' ? 'boys' : 'girls'];
   const clampedAge = Math.max(0, Math.min(24, ageMonths));
@@ -352,15 +418,13 @@ function getLMSAtAge(type, gender, ageMonths) {
 }
 
 function zScoreWHO(value, type, gender, ageMonths) {
-  // value must be in kg for weight, cm for height/head
   const [L, M, S] = getLMSAtAge(type, gender, ageMonths);
   if (Math.abs(L) < 0.0001) return Math.log(value / M) / S;
   return (Math.pow(value / M, L) - 1) / (L * S);
 }
 
-// Z-score interpolation fallback (used for CDC and out-of-range)
 function zScoreFromBands(value, bands) {
-  const zBands = [-1.881, -1.036, 0, 1.036, 1.881]; // P3, P15, P50, P85, P97
+  const zBands = [-1.881, -1.036, 0, 1.036, 1.881];
   if (value <= bands[0]) return zBands[0] + (value - bands[0]) / (bands[1] - bands[0]) * (zBands[1] - zBands[0]);
   if (value >= bands[4]) return zBands[3] + (value - bands[3]) / (bands[4] - bands[3]) * (zBands[4] - zBands[3]);
   for (let i = 0; i < 4; i++) {
@@ -372,25 +436,20 @@ function zScoreFromBands(value, bands) {
   return 0;
 }
 
-// ─── Main Percentile API ──────────────────────────────────────────────────────
-// Returns { pct, z, label } where pct is 0–100, label is display string
 function getPercentileInfo(value, ageMonths, type, gender) {
   if (value == null || isNaN(value)) return { pct: null, z: null, label: '—' };
   const std = document.getElementById('refStandard')?.value || 'WHO';
 
   let z;
   if (std === 'WHO' && ageMonths <= 24) {
-    // Use accurate LMS method - weight stored in grams, LMS expects kg
     const v = type === 'weight' ? value / 1000 : value;
     z = zScoreWHO(v, type, gender, ageMonths);
   } else {
-    // CDC: use Z-score band interpolation on the 5-band reference
     const bands = getRefBands(type, gender, ageMonths);
-    const v = type === 'weight' ? value / 1000 : value; // bands are in kg for weight
+    const v = type === 'weight' ? value / 1000 : value;
     z = zScoreFromBands(v, bands);
   }
 
-  // Clamp extreme z-scores
   z = Math.max(-4, Math.min(4, z));
   const pct = normalCDF(z) * 100;
 
@@ -403,12 +462,10 @@ function getPercentileInfo(value, ageMonths, type, gender) {
   return { pct, z: +z.toFixed(2), label };
 }
 
-// Keep a simple numeric accessor for backwards compat
 function getPercentile(value, ageMonths, type, gender) {
   return getPercentileInfo(value, ageMonths, type, gender).label;
 }
 
-// ─── Reference Bands (for chart curves) ──────────────────────────────────────
 function getRefBands(type, gender, ageMonths) {
   const std = document.getElementById('refStandard')?.value || 'WHO';
   const refData = std === 'CDC' ? CDC : WHO;
@@ -425,7 +482,6 @@ function getRefBands(type, gender, ageMonths) {
   return table[lo].map((v,i) => +(v + t*(table[hi][i]-v)).toFixed(3));
 }
 
-// Generate LMS reference curve points for WHO
 function getLMSCurvePoint(type, gender, ageMonths, zTargets) {
   const [L, M, S] = getLMSAtAge(type, gender, ageMonths);
   return zTargets.map(z => {
@@ -436,11 +492,10 @@ function getLMSCurvePoint(type, gender, ageMonths, zTargets) {
   });
 }
 
-// ─── Profile Management ───────────────────────────────────────────────────────
 function openAddProfileModal() {
   document.getElementById('addProfileModal').classList.add('open');
   const d = new Date(); d.setMonth(d.getMonth()-1);
-  document.getElementById('newDob').valueAsDate = d;
+  document.getElementById('newDob').value = getLocalYYYYMMDD(d);
 }
 function closeModal(id) { document.getElementById(id).classList.remove('open'); }
 
@@ -451,7 +506,7 @@ function saveProfile() {
   if (!name || !dob) { alert('Please enter a name and date of birth.'); return; }
 
   const bwRaw = parseFloat(document.getElementById('newBirthWeight').value);
-  const bw = !isNaN(bwRaw) ? bwRaw : null;   // stored in grams
+  const bw = !isNaN(bwRaw) ? bwRaw : null;
   const bl = parseFloat(document.getElementById('newBirthLength').value) || null;
   const bh = parseFloat(document.getElementById('newBirthHC').value) || null;
 
@@ -497,41 +552,6 @@ function switchProfile(id) {
   }
 }
 
-// ─── Age Helpers (FIXED TIMEZONE & MATH) ──────────────────────────────────────
-function parseLocal(str) {
-  if (!str) return new Date();
-  // Strip time and isolate the exact local year/month/day strictly to avoid UTC shifting
-  const parts = str.split('T')[0].split('-');
-  if (parts.length === 3) return new Date(parts[0], parts[1] - 1, parts[2]);
-  return new Date(str); 
-}
-
-function getAgeMonths(dobStr, measDateStr) {
-  const dob = parseLocal(dobStr), meas = parseLocal(measDateStr);
-  return Math.max(0, (meas - dob) / (1000*60*60*24*30.4375));
-}
-
-function formatAge(months) {
-  const totalDays = Math.round(months * 30.4375);
-  if (totalDays < 30) return `${totalDays}d`;
-  
-  const m = Math.floor(months);
-  const remainingDays = Math.round((months - m) * 30.4375);
-  const w = Math.floor(remainingDays / 7);
-  
-  if (months < 24) {
-    return w > 0 ? `${m}m ${w}w` : `${m}m`;
-  }
-  const y = Math.floor(m / 12);
-  const remM = m % 12;
-  return remM > 0 ? `${y}y ${remM}m` : `${y}y`;
-}
-
-function formatDate(dateStr) {
-  // Now uses parseLocal so visual dates in tables map perfectly to input
-  return parseLocal(dateStr).toLocaleDateString('en-GB', { day:'2-digit', month:'short', year:'numeric' });
-}
-
 function updateMeasAgePreview() {
   const profile = getCurrentProfile();
   if (!profile) return;
@@ -544,7 +564,6 @@ function updateMeasAgePreview() {
   document.getElementById('measAgePreview').textContent = formatAge(ageM) + ' old';
 }
 
-// ─── Unit Sync ────────────────────────────────────────────────────────────────
 function syncWeightGToLbs() {
   const g = parseFloat(document.getElementById('weight').value);
   if (!isNaN(g)) document.getElementById('weightLbs').value = +(g/453.592).toFixed(2);
@@ -570,13 +589,12 @@ function syncHeadInToCm() {
   if (!isNaN(v)) document.getElementById('headCirc').value = +(v*2.54).toFixed(1);
 }
 
-// ─── Add Measurement ──────────────────────────────────────────────────────────
 function addMeasurement() {
   const profile = getCurrentProfile();
   if (!profile) { alert('Please select a baby profile first.'); return; }
 
   const date = document.getElementById('measDate').value;
-  const weightG = parseFloat(document.getElementById('weight').value) || null; // stored in grams
+  const weightG = parseFloat(document.getElementById('weight').value) || null;
   const height = parseFloat(document.getElementById('height').value) || null;
   const headCirc = parseFloat(document.getElementById('headCirc').value) || null;
   const notes = document.getElementById('notes').value.trim();
@@ -585,7 +603,7 @@ function addMeasurement() {
   if (!weightG && !height && !headCirc) { alert('Please enter at least one measurement.'); return; }
 
   profile.measurements.push({ date, weight: weightG, height, headCirc, notes });
-  profile.measurements.sort((a,b) => new Date(a.date)-new Date(b.date));
+  profile.measurements.sort((a,b) => parseDateStrict(a.date).getTime() - parseDateStrict(b.date).getTime());
   saveProfiles();
   renderAll();
 
@@ -594,7 +612,6 @@ function addMeasurement() {
   });
 }
 
-// ─── Render All ───────────────────────────────────────────────────────────────
 function renderAll() {
   const profile = getCurrentProfile();
   if (!profile) return;
@@ -613,9 +630,9 @@ function renderAll() {
 }
 
 function renderProfileCard(p) {
-  const ageMonths = getAgeMonths(p.dob, new Date().toISOString().split('T')[0]);
+  const ageMonths = getAgeMonths(p.dob, getLocalYYYYMMDD());
   const gIcon = p.gender === 'male' ? '👦' : '👧';
-  const dob = new Date(p.dob).toLocaleDateString('en-GB', { day:'2-digit', month:'long', year:'numeric' });
+  const dob = formatDate(p.dob);
   document.getElementById('profileInfo').innerHTML = `
     <div class="profile-card">
       <div class="baby-name">${gIcon} ${p.name}</div>
@@ -674,7 +691,6 @@ function renderStats(p) {
     </div>`;
 }
 
-// ─── Charts (FIXED SHADING BUG) ───────────────────────────────────────────────
 const chartConfig = {
   weight: { label: 'Weight (g)', unit: 'g', key: 'weight' },
   height: { label: 'Length / Height (cm)', unit: 'cm', key: 'height' },
@@ -692,7 +708,7 @@ function renderChart(type, profile) {
   const std = document.getElementById('refStandard')?.value || 'WHO';
 
   const refMonths = Array.from({length:25},(_,i)=>i);
-  const zTargets = [-1.881, -1.036, 0, 1.036, 1.881]; // P3,P15,P50,P85,P97
+  const zTargets = [-1.881, -1.036, 0, 1.036, 1.881];
 
   const refCurves = refMonths.map(m => {
     if (std === 'WHO') {
@@ -704,7 +720,6 @@ function renderChart(type, profile) {
     }
   });
 
-  // Fixed `fill` targeting to strictly bound against percentiles instead of baby data
   const datasets = [
     {
       label:'P97', data: refCurves.map((r,i)=>({x:refMonths[i],y:r[4]})),
@@ -809,7 +824,6 @@ function renderChart(type, profile) {
   }
 }
 
-// ─── Table ────────────────────────────────────────────────────────────────────
 function renderTable(profile) {
   const container = document.getElementById('tableArea');
   const ms = profile.measurements;
@@ -818,7 +832,6 @@ function renderTable(profile) {
     return;
   }
 
-  // Build rows: iterate in reverse for display (newest first), pass ORIGINAL index to delete
   const rows = ms.map((m, origIdx) => {
     const ageM = getAgeMonths(profile.dob, m.date);
     const wInfo = m.weight ? getPercentileInfo(m.weight, ageM, 'weight', profile.gender) : null;
@@ -869,7 +882,6 @@ function renderTable(profile) {
   </table></div>`;
 }
 
-// ─── FIX: Delete uses original index directly ─────────────────────────────────
 function deleteMeasurement(origIdx) {
   const profile = getCurrentProfile();
   if (!profile) return;
@@ -879,7 +891,6 @@ function deleteMeasurement(origIdx) {
   renderAll();
 }
 
-// ─── Tab Switching ────────────────────────────────────────────────────────────
 function switchTab(tab) {
   activeTab = tab;
   document.querySelectorAll('.chart-panel').forEach(p => p.classList.remove('active'));
@@ -895,7 +906,6 @@ function switchTab(tab) {
   });
 }
 
-// ─── Export ───────────────────────────────────────────────────────────────────
 function buildExportRows(profile) {
   const std = document.getElementById('refStandard')?.value || 'WHO';
   return profile.measurements.map(m => {
@@ -940,7 +950,7 @@ async function exportCSV() {
     r.standard, `"${String(r.notes).replace(/"/g,'""')}"`
   ].join(','));
   const content = [headers.join(','), ...csvRows].join('\n');
-  const fname = `${profile.name}_growth_${today()}.csv`;
+  const fname = `${profile.name}_growth_${getLocalYYYYMMDD()}.csv`;
   const saved = await writeToFolder('exports', fname, content);
   if (!saved) downloadBlob(fname, content, 'text/csv');
   else showImportStatus(`Exported: exports/${fname}`, 'success');
@@ -956,7 +966,7 @@ async function exportJSON() {
     measurements: buildExportRows(profile)
   };
   const content = JSON.stringify(data, null, 2);
-  const fname = `${profile.name}_growth_${today()}.json`;
+  const fname = `${profile.name}_growth_${getLocalYYYYMMDD()}.json`;
   const saved = await writeToFolder('exports', fname, content);
   if (!saved) downloadBlob(fname, content, 'application/json');
   else showImportStatus(`Exported: exports/${fname}`, 'success');
@@ -979,8 +989,7 @@ async function exportXLSX() {
   const ws = XLSX.utils.aoa_to_sheet(sheetData);
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, profile.name);
-  const fname = `${profile.name}_growth_${today()}.xlsx`;
-  // For XLSX, always download (binary)
+  const fname = `${profile.name}_growth_${getLocalYYYYMMDD()}.xlsx`;
   XLSX.writeFile(wb, fname);
   if (rootDirHandle) showImportStatus(`XLSX downloaded (binary files go to your downloads folder)`, 'info');
 }
@@ -989,7 +998,7 @@ function printView() {
   const profile = getCurrentProfile();
   if (!profile) return;
   const rows = buildExportRows(profile).map(r => `<tr>
-    <td>${r.date}</td><td>${r.ageFormatted}</td>
+    <td>${formatDate(r.date)}</td><td>${r.ageFormatted}</td>
     <td>${r.weightG ? r.weightG+'g' : '—'}</td><td>${r.weightPct}</td>
     <td>${r.heightCm ? r.heightCm+'cm' : '—'}</td><td>${r.heightPct}</td>
     <td>${r.headCircCm ? r.headCircCm+'cm' : '—'}</td><td>${r.headCircPct}</td>
@@ -1001,13 +1010,13 @@ function printView() {
   th,td{border:1px solid #ccc;padding:6px 8px;text-align:left;font-size:12px}
   th{background:#f0f0f0}h1{font-size:18px}p{font-size:12px;color:#666;margin:4px 0}</style></head>
   <body><h1>👶 ${profile.name} — Growth Chart</h1>
-  <p>Born: ${formatDate(profile.dob)} | ${profile.gender} | Standard: ${document.getElementById('refStandard')?.value||'WHO'} | Printed: ${formatDate(new Date().toISOString().split('T')[0])}</p>
+  <p>Born: ${formatDate(profile.dob)} | ${profile.gender} | Standard: ${document.getElementById('refStandard')?.value||'WHO'} | Printed: ${formatDate(getLocalYYYYMMDD())}</p>
   <table><thead><tr><th>Date</th><th>Age</th><th>Weight</th><th>W%</th><th>Length</th><th>L%</th><th>Head</th><th>HC%</th><th>Notes</th></tr></thead>
   <tbody>${rows}</tbody></table></body></html>`);
   w.print();
 }
 
-function today() { return new Date().toISOString().split('T')[0]; }
+function today() { return getLocalYYYYMMDD(); }
 
 function downloadBlob(filename, content, mimeType) {
   const a = document.createElement('a');
@@ -1017,7 +1026,6 @@ function downloadBlob(filename, content, mimeType) {
   setTimeout(() => URL.revokeObjectURL(a.href), 5000);
 }
 
-// ─── Import ───────────────────────────────────────────────────────────────────
 function showImportStatus(msg, type='info') {
   const el = document.getElementById('importStatus');
   el.textContent = msg;
@@ -1056,7 +1064,6 @@ async function importDataFile(input) {
     showImportPreview(rows, profile.name, file.name);
   } catch(e) {
     showImportStatus(`Error reading file: ${e.message}`, 'error');
-    console.error(e);
   }
   input.value = '';
 }
@@ -1072,7 +1079,6 @@ function autoDetectDelimiter(text) {
 async function parseJSON(file) {
   const text = await file.text();
   const data = JSON.parse(text);
-  // Support: array of measurements, or {measurements: [...]}
   const arr = Array.isArray(data) ? data : (data.measurements || []);
   return arr.map(normalizeImportRow).filter(Boolean);
 }
@@ -1109,22 +1115,19 @@ function splitCSVLine(line, delimiter) {
   return result;
 }
 
-// Normalise an imported row object to { date, weight(g), height(cm), headCirc(cm), notes }
 function normalizeImportRow(row) {
-  // Date: try many field names
   const dateRaw = row.date || row.Date || row['measurement date'] || row['Measurement Date'] || row.measured || '';
   if (!dateRaw) return null;
   const date = parseImportDate(String(dateRaw));
   if (!date) return null;
 
-  // Weight: accept grams or kg or lbs
   let weightG = null;
   const wRaw = row.weight || row.Weight || row['weight (g)'] || row['Weight (g)'] || row['weight(g)'] || '';
   const wKg  = row['weight (kg)'] || row['Weight (kg)'] || row['weight_kg'] || '';
   const wLbs = row['weight (lbs)'] || row['Weight (lbs)'] || row['weight_lbs'] || '';
   if (wRaw !== '' && wRaw !== null) {
     const v = parseFloat(wRaw);
-    if (!isNaN(v)) weightG = v < 30 ? Math.round(v*1000) : Math.round(v); // < 30 assume kg
+    if (!isNaN(v)) weightG = v < 30 ? Math.round(v*1000) : Math.round(v);
   } else if (wKg !== '' && wKg !== null) {
     const v = parseFloat(wKg);
     if (!isNaN(v) && v > 0) weightG = Math.round(v*1000);
@@ -1133,7 +1136,6 @@ function normalizeImportRow(row) {
     if (!isNaN(v) && v > 0) weightG = Math.round(v*453.592);
   }
 
-  // Height
   const hRaw = row.height || row.Height || row.length || row.Length || row['height (cm)'] || row['Height (cm)'] || row['length (cm)'] || '';
   const hIn  = row['height (in)'] || row['length (in)'] || row['Height (in)'] || '';
   let height = null;
@@ -1143,7 +1145,6 @@ function normalizeImportRow(row) {
     const v = parseFloat(hIn); if (!isNaN(v) && v > 0) height = +(v*2.54).toFixed(1);
   }
 
-  // Head circumference
   const hcKeys = ['headcirc','head circ','head circumference','headcircumference','head_circ','hc',
                   'head circ (cm)','head circumference (cm)','headcirc (cm)'];
   let headCirc = null;
@@ -1160,18 +1161,15 @@ function normalizeImportRow(row) {
 
 function parseImportDate(raw) {
   if (!raw) return null;
-  // Handle Date objects serialized
   const cleaned = raw.trim();
-  // Try ISO format
   let d = new Date(cleaned);
   if (!isNaN(d)) {
-    return d.toISOString().split('T')[0];
+    return getLocalYYYYMMDD(d);
   }
-  // Try DD/MM/YYYY or DD-MM-YYYY
   const dmyMatch = cleaned.match(/^(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{4})$/);
   if (dmyMatch) {
-    d = new Date(`${dmyMatch[3]}-${dmyMatch[2].padStart(2,'0')}-${dmyMatch[1].padStart(2,'0')}`);
-    if (!isNaN(d)) return d.toISOString().split('T')[0];
+    d = new Date(parseInt(dmyMatch[3], 10), parseInt(dmyMatch[2], 10)-1, parseInt(dmyMatch[1], 10));
+    if (!isNaN(d)) return getLocalYYYYMMDD(d);
   }
   return null;
 }
@@ -1185,7 +1183,7 @@ function showImportPreview(rows, profileName, filename) {
     <thead><tr><th>Date</th><th>Weight (g)</th><th>Length (cm)</th><th>Head Circ (cm)</th><th>Notes</th></tr></thead>
     <tbody>
       ${preview.map(r => `<tr>
-        <td>${r.date}</td>
+        <td>${formatDate(r.date)}</td>
         <td>${r.weight ?? '—'}</td>
         <td>${r.height ?? '—'}</td>
         <td>${r.headCirc ?? '—'}</td>
@@ -1205,7 +1203,6 @@ function confirmImport() {
 
   let added = 0, skipped = 0;
   pendingImportData.forEach(row => {
-    // Skip if exact same date+weight exists
     const dupe = profile.measurements.some(m =>
       m.date === row.date && m.weight === row.weight &&
       m.height === row.height && m.headCirc === row.headCirc
@@ -1215,7 +1212,7 @@ function confirmImport() {
     added++;
   });
 
-  profile.measurements.sort((a,b) => new Date(a.date)-new Date(b.date));
+  profile.measurements.sort((a,b) => parseDateStrict(a.date).getTime() - parseDateStrict(b.date).getTime());
   pendingImportData = [];
   saveProfiles();
   closeModal('importPreviewModal');
