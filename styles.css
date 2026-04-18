@@ -41,7 +41,6 @@ body { font-family: var(--sans); background: var(--cream); color: var(--text); m
 .btn-danger { background: #dc3545; color: white; border-color: #dc3545; }
 .btn-danger:hover { background: #c82333; }
 
-/* Folder status bar */
 .folder-status-bar {
   background: var(--sage-light); border-bottom: 1px solid var(--sage-mid);
   padding: 6px 24px; font-size: 12px; color: var(--sage);
@@ -78,7 +77,6 @@ body { font-family: var(--sans); background: var(--cream); color: var(--text); m
 }
 .form-row .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 
-/* Import area */
 .import-area { margin-bottom: 8px; }
 .import-hint { font-size: 12px; color: var(--text-muted); margin-bottom: 8px; line-height: 1.5; }
 .import-status {
@@ -144,7 +142,6 @@ table.dtable thead th {
 }
 table.dtable tbody tr:hover { background: var(--cream); }
 table.dtable tbody td { padding: 9px 12px; border-bottom: 1px solid var(--border); color: var(--text); }
-/* DATE COLUMN: single line, no wrapping */
 table.dtable tbody td:first-child { white-space: nowrap; }
 table.dtable tbody tr:last-child td { border-bottom: none; }
 .pct-badge {
@@ -168,7 +165,6 @@ table.dtable tbody tr:last-child td { border-bottom: none; }
 .modal h3 { font-family: var(--font); font-size: 18px; margin-bottom: 16px; color: var(--text); }
 .modal-footer { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
 
-/* Import preview table inside modal */
 .preview-table { width: 100%; border-collapse: collapse; font-size: 12px; }
 .preview-table th { padding: 6px 10px; background: var(--sage-light); color: var(--sage); font-weight: 600; text-align: left; border-bottom: 1px solid var(--sage-mid); }
 .preview-table td { padding: 6px 10px; border-bottom: 1px solid var(--border); }
