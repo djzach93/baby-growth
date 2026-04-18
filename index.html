@@ -33,8 +33,8 @@
     <div id="entryForm" style="display:none">
       <div class="section-title">Add Measurement</div>
       <div class="form-row">
-        <label>Measurement Date</label>
-        <input type="date" id="measDate">
+        <label>Measurement Date <span id="measAgePreview" style="float:right; color:var(--sage); font-weight:600;"></span></label>
+        <input type="date" id="measDate" oninput="updateMeasAgePreview()" onchange="updateMeasAgePreview()">
       </div>
       <div class="form-row">
         <label>Weight</label>

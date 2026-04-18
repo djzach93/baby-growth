@@ -323,6 +323,7 @@ window.onload = async function() {
   renderProfileSelect();
   if (currentProfileId && profiles.find(p => p.id === currentProfileId)) {
     renderAll();
+    updateMeasAgePreview();
   }
 };
 
@@ -496,25 +497,51 @@ function switchProfile(id) {
   }
 }
 
-// ─── Age Helpers ──────────────────────────────────────────────────────────────
+// ─── Age Helpers (FIXED TIMEZONE & MATH) ──────────────────────────────────────
+function parseLocal(str) {
+  if (!str) return new Date();
+  // Strip time and isolate the exact local year/month/day strictly to avoid UTC shifting
+  const parts = str.split('T')[0].split('-');
+  if (parts.length === 3) return new Date(parts[0], parts[1] - 1, parts[2]);
+  return new Date(str); 
+}
+
 function getAgeMonths(dobStr, measDateStr) {
-  const dob = new Date(dobStr), meas = new Date(measDateStr);
+  const dob = parseLocal(dobStr), meas = parseLocal(measDateStr);
   return Math.max(0, (meas - dob) / (1000*60*60*24*30.4375));
 }
 
 function formatAge(months) {
-  if (months < 1) return `${Math.round(months*30)}d`;
+  const totalDays = Math.round(months * 30.4375);
+  if (totalDays < 30) return `${totalDays}d`;
+  
+  const m = Math.floor(months);
+  const remainingDays = Math.round((months - m) * 30.4375);
+  const w = Math.floor(remainingDays / 7);
+  
   if (months < 24) {
-    const m = Math.floor(months), w = Math.round((months-m)*4.33);
     return w > 0 ? `${m}m ${w}w` : `${m}m`;
   }
-  const y = Math.floor(months/12), m = Math.floor(months%12);
-  return m > 0 ? `${y}y ${m}m` : `${y}y`;
+  const y = Math.floor(m / 12);
+  const remM = m % 12;
+  return remM > 0 ? `${y}y ${remM}m` : `${y}y`;
 }
 
 function formatDate(dateStr) {
-  // Always returns compact single-line date: "16 Apr 2026"
-  return new Date(dateStr).toLocaleDateString('en-GB', { day:'2-digit', month:'short', year:'numeric' });
+  // Now uses parseLocal so visual dates in tables map perfectly to input
+  return parseLocal(dateStr).toLocaleDateString('en-GB', { day:'2-digit', month:'short', year:'numeric' });
+}
+
+function updateMeasAgePreview() {
+  const profile = getCurrentProfile();
+  if (!profile) return;
+  const measDate = document.getElementById('measDate').value;
+  if (!measDate) {
+    document.getElementById('measAgePreview').textContent = '';
+    return;
+  }
+  const ageM = getAgeMonths(profile.dob, measDate);
+  document.getElementById('measAgePreview').textContent = formatAge(ageM) + ' old';
 }
 
 // ─── Unit Sync ────────────────────────────────────────────────────────────────
@@ -582,6 +609,7 @@ function renderAll() {
   renderChart('height', profile);
   renderChart('head', profile);
   renderTable(profile);
+  updateMeasAgePreview();
 }
 
 function renderProfileCard(p) {
@@ -646,7 +674,7 @@ function renderStats(p) {
     </div>`;
 }
 
-// ─── Charts ───────────────────────────────────────────────────────────────────
+// ─── Charts (FIXED SHADING BUG) ───────────────────────────────────────────────
 const chartConfig = {
   weight: { label: 'Weight (g)', unit: 'g', key: 'weight' },
   height: { label: 'Length / Height (cm)', unit: 'cm', key: 'height' },
@@ -663,27 +691,25 @@ function renderChart(type, profile) {
   const gender = profile.gender;
   const std = document.getElementById('refStandard')?.value || 'WHO';
 
-  // Build reference curves at monthly intervals
   const refMonths = Array.from({length:25},(_,i)=>i);
   const zTargets = [-1.881, -1.036, 0, 1.036, 1.881]; // P3,P15,P50,P85,P97
 
   const refCurves = refMonths.map(m => {
     if (std === 'WHO') {
       const pts = getLMSCurvePoint(type, gender, m, zTargets);
-      // For weight: LMS gives kg → convert to grams for chart
       return type === 'weight' ? pts.map(v => +(v*1000).toFixed(0)) : pts;
     } else {
-      // CDC: use band data; weight bands are in kg → convert to grams
       const bands = getRefBands(type, gender, m);
       return type === 'weight' ? bands.map(v => +(v*1000).toFixed(0)) : bands;
     }
   });
 
+  // Fixed `fill` targeting to strictly bound against percentiles instead of baby data
   const datasets = [
     {
       label:'P97', data: refCurves.map((r,i)=>({x:refMonths[i],y:r[4]})),
       borderColor:'#b8d8c4', borderWidth:1.5, borderDash:[5,3],
-      pointRadius:0, fill:false, tension:0.4
+      pointRadius:0, fill:'+1', backgroundColor:'rgba(168,216,192,0.06)', tension:0.4
     },
     {
       label:'P85', data: refCurves.map((r,i)=>({x:refMonths[i],y:r[3]})),
@@ -703,16 +729,15 @@ function renderChart(type, profile) {
     {
       label:'P3', data: refCurves.map((r,i)=>({x:refMonths[i],y:r[0]})),
       borderColor:'#b8d8c4', borderWidth:1.5, borderDash:[5,3],
-      pointRadius:0, fill:'+1', backgroundColor:'rgba(168,216,192,0.06)', tension:0.4
+      pointRadius:0, fill:'-1', backgroundColor:'rgba(168,216,192,0.06)', tension:0.4
     }
   ];
 
-  // Baby's actual measurements
   const babyData = profile.measurements
     .filter(m => m[cfg.key] != null)
     .map(m => ({
       x: +getAgeMonths(profile.dob, m.date).toFixed(2),
-      y: m[cfg.key]  // weight already in grams, height/head in cm
+      y: m[cfg.key] 
     }));
 
   if (babyData.length) {
@@ -772,7 +797,6 @@ function renderChart(type, profile) {
     }
   });
 
-  // Legend HTML
   const legendId = { weight:'legend-weight', height:'legend-height', head:'legend-head' }[type];
   const legendEl = document.getElementById(legendId);
   if (legendEl) {
