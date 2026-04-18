@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Baby Growth Chart</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -16,8 +17,12 @@
       <option value="">— Select Baby —</option>
     </select>
     <button class="btn btn-sage" onclick="openAddProfileModal()">+ Add Baby</button>
+    <button class="btn btn-outline" id="folderBtn" onclick="setRootFolder()" title="Set folder for cache and exports">📁 Set Save Folder</button>
+    <button class="btn btn-outline" onclick="saveCacheNow()" title="Save current data to cache">💾 Save Cache</button>
   </div>
 </div>
+
+<div id="folderStatus" style="display:none" class="folder-status-bar"></div>
 
 <div class="main-layout">
   <aside class="sidebar">
@@ -34,21 +39,21 @@
       <div class="form-row">
         <label>Weight</label>
         <div class="two-col">
-          <div class="unit-row"><input type="number" id="weight" placeholder="e.g. 6.5" step="0.01" min="0"><span class="unit-badge">g</span></div>
-          <div class="unit-row"><input type="number" id="weightLbs" placeholder="lbs" step="0.01" min="0" oninput="syncWeightLbsToKg()"><span class="unit-badge">lbs</span></div>
+          <div class="unit-row"><input type="number" id="weight" placeholder="e.g. 6500" step="1" min="0" oninput="syncWeightGToLbs()"><span class="unit-badge">g</span></div>
+          <div class="unit-row"><input type="number" id="weightLbs" placeholder="lbs" step="0.01" min="0" oninput="syncWeightLbsToG()"><span class="unit-badge">lbs</span></div>
         </div>
       </div>
       <div class="form-row">
         <label>Length / Height</label>
         <div class="two-col">
-          <div class="unit-row"><input type="number" id="height" placeholder="e.g. 62.5" step="0.1" min="0"><span class="unit-badge">cm</span></div>
+          <div class="unit-row"><input type="number" id="height" placeholder="e.g. 62.5" step="0.1" min="0" oninput="syncHeightCmToIn()"><span class="unit-badge">cm</span></div>
           <div class="unit-row"><input type="number" id="heightIn" placeholder="in" step="0.1" min="0" oninput="syncHeightInToCm()"><span class="unit-badge">in</span></div>
         </div>
       </div>
       <div class="form-row">
         <label>Head Circumference</label>
         <div class="two-col">
-          <div class="unit-row"><input type="number" id="headCirc" placeholder="e.g. 40.2" step="0.1" min="0"><span class="unit-badge">cm</span></div>
+          <div class="unit-row"><input type="number" id="headCirc" placeholder="e.g. 40.2" step="0.1" min="0" oninput="syncHeadCmToIn()"><span class="unit-badge">cm</span></div>
           <div class="unit-row"><input type="number" id="headCircIn" placeholder="in" step="0.1" min="0" oninput="syncHeadInToCm()"><span class="unit-badge">in</span></div>
         </div>
       </div>
@@ -58,7 +63,17 @@
       </div>
       <button class="btn btn-sage" style="width:100%;margin-top:4px" onclick="addMeasurement()">Add Measurement</button>
 
-      <div class="section-title" style="margin-top:24px">Reference Standard</div>
+      <div class="section-title" style="margin-top:20px">Import Data</div>
+      <div class="import-area">
+        <p class="import-hint">Import measurements from CSV, JSON, XLSX, XLS, or TXT files</p>
+        <label class="btn btn-outline" style="width:100%;text-align:center;cursor:pointer;display:block">
+          📂 Import File
+          <input type="file" id="importFile" accept=".csv,.json,.xlsx,.xls,.txt,.tsv" style="display:none" onchange="importDataFile(this)">
+        </label>
+        <div id="importStatus" style="display:none" class="import-status"></div>
+      </div>
+
+      <div class="section-title" style="margin-top:20px">Reference Standard</div>
       <div class="form-row">
         <select id="refStandard" onchange="renderAll()">
           <option value="WHO">WHO (World Health Organization)</option>
@@ -105,6 +120,7 @@
           <div class="export-btns">
             <button class="btn btn-outline btn-sm" onclick="exportCSV()">Export CSV</button>
             <button class="btn btn-outline btn-sm" onclick="exportJSON()">Export JSON</button>
+            <button class="btn btn-outline btn-sm" onclick="exportXLSX()">Export XLSX</button>
             <button class="btn btn-outline btn-sm" onclick="printView()">🖨 Print</button>
           </div>
         </div>
@@ -127,12 +143,25 @@
         <option value="female">Female</option>
       </select>
     </div>
-    <div class="form-row"><label>Birth Weight (kg, optional)</label><input type="number" id="newBirthWeight" placeholder="e.g. 3.2" step="0.01"></div>
+    <div class="form-row"><label>Birth Weight (g, optional)</label><input type="number" id="newBirthWeight" placeholder="e.g. 3200" step="1"></div>
     <div class="form-row"><label>Birth Length (cm, optional)</label><input type="number" id="newBirthLength" placeholder="e.g. 50.0" step="0.1"></div>
     <div class="form-row"><label>Birth Head Circumference (cm, optional)</label><input type="number" id="newBirthHC" placeholder="e.g. 34.0" step="0.1"></div>
     <div class="modal-footer">
       <button class="btn btn-outline" onclick="closeModal('addProfileModal')">Cancel</button>
       <button class="btn btn-sage" onclick="saveProfile()">Save Profile</button>
+    </div>
+  </div>
+</div>
+
+<!-- Import Preview Modal -->
+<div class="modal-overlay" id="importPreviewModal">
+  <div class="modal" style="width:500px;max-width:95vw">
+    <h3>Import Preview</h3>
+    <p id="importPreviewInfo" style="font-size:13px;color:#7a736c;margin-bottom:12px"></p>
+    <div id="importPreviewTable" style="max-height:280px;overflow-y:auto;border:1px solid #e0dbd5;border-radius:8px;"></div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeModal('importPreviewModal')">Cancel</button>
+      <button class="btn btn-sage" onclick="confirmImport()">Import All</button>
     </div>
   </div>
 </div>
