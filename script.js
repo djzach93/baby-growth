@@ -564,13 +564,41 @@ function updateMeasAgePreview() {
   document.getElementById('measAgePreview').textContent = formatAge(ageM) + ' old';
 }
 
-function syncWeightGToLbs() {
+let lastWeightInputUnit = 'g';
+function syncWeightGToOthers() {
+  lastWeightInputUnit = 'g';
   const g = parseFloat(document.getElementById('weight').value);
-  if (!isNaN(g)) document.getElementById('weightLbs').value = +(g/453.592).toFixed(2);
+  if (!isNaN(g)) {
+    document.getElementById('weightLbs').value = +(g/453.592).toFixed(2);
+    document.getElementById('weightKg').value = +(g/1000).toFixed(3);
+  } else {
+    document.getElementById('weightLbs').value = '';
+    document.getElementById('weightKg').value = '';
+  }
 }
-function syncWeightLbsToG() {
+function syncWeightLbsToOthers() {
+  lastWeightInputUnit = 'lbs';
   const lbs = parseFloat(document.getElementById('weightLbs').value);
-  if (!isNaN(lbs)) document.getElementById('weight').value = Math.round(lbs*453.592);
+  if (!isNaN(lbs)) {
+    const g = Math.round(lbs*453.592);
+    document.getElementById('weight').value = g;
+    document.getElementById('weightKg').value = +(g/1000).toFixed(3);
+  } else {
+    document.getElementById('weight').value = '';
+    document.getElementById('weightKg').value = '';
+  }
+}
+function syncWeightKgToOthers() {
+  lastWeightInputUnit = 'kg';
+  const kg = parseFloat(document.getElementById('weightKg').value);
+  if (!isNaN(kg)) {
+    const g = Math.round(kg*1000);
+    document.getElementById('weight').value = g;
+    document.getElementById('weightLbs').value = +(g/453.592).toFixed(2);
+  } else {
+    document.getElementById('weight').value = '';
+    document.getElementById('weightLbs').value = '';
+  }
 }
 function syncHeightCmToIn() {
   const cm = parseFloat(document.getElementById('height').value);
@@ -602,12 +630,13 @@ function addMeasurement() {
   if (!date) { alert('Please enter a measurement date.'); return; }
   if (!weightG && !height && !headCirc) { alert('Please enter at least one measurement.'); return; }
 
-  profile.measurements.push({ date, weight: weightG, height, headCirc, notes });
+  profile.measurements.push({ date, weight: weightG, weightUnit: lastWeightInputUnit, height, headCirc, notes });
+  lastWeightInputUnit = 'g';
   profile.measurements.sort((a,b) => parseDateStrict(a.date).getTime() - parseDateStrict(b.date).getTime());
   saveProfiles();
   renderAll();
 
-  ['weight','weightLbs','height','heightIn','headCirc','headCircIn','notes'].forEach(id => {
+  ['weight','weightKg','weightLbs','height','heightIn','headCirc','headCircIn','notes'].forEach(id => {
     document.getElementById(id).value = '';
   });
 }
@@ -673,8 +702,8 @@ function renderStats(p) {
   document.getElementById('statsRow').innerHTML = `
     <div class="stat-card highlight">
       <div class="stat-label">Weight</div>
-      <div class="stat-value">${last.weight ? last.weight+'g' : '—'}</div>
-      <div class="stat-sub">${last.weight ? `≈ ${(last.weight/453.592).toFixed(1)} lbs` : ''}</div>
+      <div class="stat-value">${last.weight ? (last.weightUnit === 'kg' ? +(last.weight/1000).toFixed(3)+'kg' : (last.weightUnit === 'lbs' ? +(last.weight/453.592).toFixed(2)+'lbs' : last.weight+'g')) : '—'}</div>
+      <div class="stat-sub">${last.weight ? (last.weightUnit === 'lbs' ? `≈ ${(last.weight/1000).toFixed(3)} kg` : `≈ ${(last.weight/453.592).toFixed(2)} lbs`) : ''}</div>
       ${wInfo ? `<span class="pct-badge ${statPctClass(wInfo)}" style="margin-top:6px">${wInfo.label} pct</span>` : ''}
     </div>
     <div class="stat-card highlight">
@@ -847,15 +876,25 @@ function renderTable(profile) {
       return `<span class="pct-badge ${cls}" title="Z-score: ${info.z}">${info.label}</span>`;
     };
 
-    const weightLbs = m.weight ? (m.weight/453.592).toFixed(1) : null;
     const heightIn  = m.height ? (m.height/2.54).toFixed(1) : null;
+
+    let wDisplay = '—';
+    if (m.weight != null) {
+      if (m.weightUnit === 'kg') {
+        wDisplay = `${+(m.weight/1000).toFixed(3)}kg<span class="metric-secondary">${+(m.weight/453.592).toFixed(2)} lbs</span>`;
+      } else if (m.weightUnit === 'lbs') {
+        wDisplay = `${+(m.weight/453.592).toFixed(2)}lbs<span class="metric-secondary">${+(m.weight/1000).toFixed(3)} kg</span>`;
+      } else {
+        wDisplay = `${m.weight}g<span class="metric-secondary">${+(m.weight/453.592).toFixed(2)} lbs</span>`;
+      }
+    }
 
     return {
       origIdx,
       html: `<tr>
         <td>${formatDate(m.date)}</td>
         <td>${formatAge(ageM)}</td>
-        <td>${m.weight != null ? `${m.weight}g<span class="metric-secondary">${weightLbs} lbs</span>` : '—'}</td>
+        <td>${wDisplay}</td>
         <td>${pBadge(wInfo)}</td>
         <td>${m.height != null ? `${m.height}cm<span class="metric-secondary">${heightIn}&quot;</span>` : '—'}</td>
         <td>${pBadge(hInfo)}</td>
@@ -1122,18 +1161,19 @@ function normalizeImportRow(row) {
   if (!date) return null;
 
   let weightG = null;
+  let weightUnit = 'g';
   const wRaw = row.weight || row.Weight || row['weight (g)'] || row['Weight (g)'] || row['weight(g)'] || '';
   const wKg  = row['weight (kg)'] || row['Weight (kg)'] || row['weight_kg'] || '';
   const wLbs = row['weight (lbs)'] || row['Weight (lbs)'] || row['weight_lbs'] || '';
   if (wRaw !== '' && wRaw !== null) {
     const v = parseFloat(wRaw);
-    if (!isNaN(v)) weightG = v < 30 ? Math.round(v*1000) : Math.round(v);
+    if (!isNaN(v)) { weightG = v < 30 ? Math.round(v*1000) : Math.round(v); weightUnit = v < 30 ? 'kg' : 'g'; }
   } else if (wKg !== '' && wKg !== null) {
     const v = parseFloat(wKg);
-    if (!isNaN(v) && v > 0) weightG = Math.round(v*1000);
+    if (!isNaN(v) && v > 0) { weightG = Math.round(v*1000); weightUnit = 'kg'; }
   } else if (wLbs !== '' && wLbs !== null) {
     const v = parseFloat(wLbs);
-    if (!isNaN(v) && v > 0) weightG = Math.round(v*453.592);
+    if (!isNaN(v) && v > 0) { weightG = Math.round(v*453.592); weightUnit = 'lbs'; }
   }
 
   const hRaw = row.height || row.Height || row.length || row.Length || row['height (cm)'] || row['Height (cm)'] || row['length (cm)'] || '';
@@ -1156,7 +1196,7 @@ function normalizeImportRow(row) {
   const notes = row.notes || row.Notes || row.note || row.Note || '';
 
   if (!weightG && !height && !headCirc) return null;
-  return { date, weight: weightG, height, headCirc, notes: String(notes) };
+  return { date, weight: weightG, weightUnit, height, headCirc, notes: String(notes) };
 }
 
 function parseImportDate(raw) {
